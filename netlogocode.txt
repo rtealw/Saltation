@@ -1,0 +1,254 @@
+; CS 390
+; May 2018
+; R. Teal Witter
+
+; Profiler used to test efficiency
+extensions [profiler]
+
+; Displaced turtles store velocities in the x, y and z directions
+turtles-own [
+  velx
+  vely
+  velz
+]
+
+; Global agentsets
+globals [
+  surface     ; Holds all turtles on the surface
+              ; (does a turtle have another one above it?)
+  displaced   ; Holds all turtles currently in the air
+]
+
+; Initialize the model
+; Called by user
+; Observer context
+to setup
+  ca
+  if layout = "piles" [create-piles]    ; Initialize to sand piles
+  if layout = "flat" [create-flat]      ; Initialize to uniform sand
+  ask patches with [pzcor < 0] [        ; Ask all patches below zero
+    set pcolor gray                     ; Set color gray to represent rock surface
+  ]
+  init-constants                        ; Initialize various constants
+end
+
+; Create sand piles
+; Called by setup
+; Observer context
+to create-piles
+  let num-peaks round max-pxcor * max-pycor / 300              ; Calculate number of peaks
+                                                               ; from world size
+  ask n-of num-peaks patches with [pzcor = 7 and pzcor > 0][   ; Ask num-peaks patches just
+                                                               ; above the ground
+    build-down                                                 ; Build-down recursively
+  ]
+end
+
+; Build sand piles down
+; Called by create-piles
+; Turtle context
+to build-down
+  if not any? turtles-here [                                        ; If no sand here
+    sprout 1 [init-sand]                                            ; Sprout 1
+  ]
+  ask neighbors with [pzcor < [pzcor] of myself and valid-sand?] [  ; Ask neighbors below
+    build-down                                                      ; Build down recursively
+  ]
+  ask neighbors with [pzcor = [pzcor] of myself and valid-sand?] [  ; Ask 1/10 of numbers across
+    if random 10 = 0 [build-down]                                   ; Build down recursively
+  ]
+end
+
+; Determine if valid sand for building down
+; Called by build-down
+; Turtle context
+to-report valid-sand?
+  report pzcor >= 0 and not any? other turtles-here          ; Report whether sand valid
+                                                             ; for building
+end
+
+; Create a uniform flat surface
+; Called by setup
+; Observer context
+to create-flat
+  ask patches with [pzcor >= 0 and pzcor <= 1] [        ; Ask patches at the first two levels
+    sprout 1 [init-sand]                                ; Sprout sand
+  ]
+end
+
+; Initialize sand
+; Called by create-piles and create-flat
+; Turtle context
+to init-sand
+  set shape "circle"        ; Set shape sphere in 3D
+  re-color                  ; Color based of zcor
+end
+
+; Re-color sand
+; Called by init-sand and coloring features
+; Turtle Context
+to re-color
+  set color 27 + zcor / 10  ; Color based on zcor
+end
+
+; Initialize constant groups and ticks
+; Called by setup
+; Observer context
+to init-constants
+  set surface turtles with [                        ; Initialize surface to sand
+    not any? turtles-on patch xcor ycor (zcor + 1)  ; with no sand above
+  ]
+  set displaced nobody                              ; Initialize displaced to nobody
+  reset-ticks                                       ; Reset-ticks for counting
+end
+
+
+
+; Move sand one step
+; Called by user in forever loop or once at a time
+; Observer context
+to move
+  blow                                                        ; Displace some sand by the wind
+  ask displaced [                                             ; Ask displaced sand
+    move-to patch (xcor + velx) (ycor + vely) (zcor + velz)   ; Move forward at own velocities
+    set velz velz - 1                                         ; Decrement z velocity to model gravity
+    impact                                                    ; Determine whether impact occurred
+  ]
+  update                                                      ; Update surface
+  if color? [color-sand]                                      ; Color sand if switch is true
+  tick                                                        ; Move forward in time
+end
+
+; Set wind to unit direction
+; Called by windward?
+; Observer context
+to-report stand [cor]
+  ifelse cor = 0 [report 0][               ; If there is no wind, report 0
+    ifelse cor < 0 [report -1]             ; If there is negative wind, report -1
+    [report 1]                             ; If there is positive wind report 1
+  ]
+end
+
+; Determine if patch windward
+; Called by blow and impact
+; Turtle context
+to-report windward?
+  report not any? turtles-on                                  ; Report whether any turtles are on
+       patch (xcor - stand windx) (ycor - stand windy) (zcor) ; the patch directly windard of self
+end
+
+; Wind displaces sand
+; Called by move
+; Observer context
+to blow
+  let num (round count surface * erosion-probability)   ; Let num to displace based on erosion-probability
+  let windward surface with [windward?]                 ; Let windward to windward surface sands
+  ifelse count windward < num  [                        ; If there aren't enough windward sands
+    ask n-of num surface [displace]                     ; Displace num surface sands
+  ][
+    ask n-of num windward [displace]                    ; Wtherwise, displace num windward
+  ]
+end
+
+; Report sand below current one
+; Called by fall and settle
+; Turtle context
+to-report sand-below
+  report turtles-on patch xcor ycor (zcor - 1)  ; Report turtles directly below current
+end
+
+; Fall due to gravity
+; Called by displace and settle
+; Turtle context
+to fall
+  while [(any? neighbors with [pzcor = -1 + [zcor] of myself         ; While any neighbors below
+                               and not any? turtles-here]            ; without any turtles
+          or not any? sand-below) and pzcor > 0] [                   ; or there isn't sand below
+    ifelse not any? sand-below [                                     ; Ifelse no sand below
+      set zcor zcor - 1                                              ; Fall down directly
+    ][
+      move-to one-of neighbors with [pzcor = -1 + [zcor] of myself   ; Move open neighbor below
+                                     and not any? turtles-here]
+    ]
+  ]
+end
+
+; Displace a sand
+; Called by blow and impact
+; Turtle context
+to displace
+  set velx windx                               ; Set x velocity to x wind velocity
+  set vely windy                               ; Set y velocity to y wind velocity
+  set velz windz                               ; Set z velocity to z wind velocity
+  set displaced (turtle-set displaced self)    ; Add self to displaced agentset
+  set surface other surface                    ; Remove self from surface
+  ask neighbors with [pzcor = 1 + [zcor] of myself and any? turtles-here] [  ; Ask neighbors without any above
+    ask turtles-here [fall]                                                  ; Fall down due to gravity
+  ]
+end
+
+; Settle sand after impact
+; Called by impact
+; Turtle Context
+to settle
+  set displaced other displaced   ; Remove self from displaced
+  fall                            ; Fall due to gravity
+end
+
+; Determine if imapct then act accordingly
+; Called by move
+; Turtle context
+to impact
+  if any? other turtles-here [                                  ; If turtles here
+    while [any? other turtles-here] [                           ; While there still are
+      set zcor zcor + 1                                         ; Move up
+    ]
+    settle                                                      ; Then settle
+    if any? other surface in-radius .5 with [windward?] [       ; If any other windward surface
+      ask one-of other surface in-radius .5 with [windward?] [  ; Displace windward surface
+        displace
+      ]
+    ]
+  ]
+  if pzcor <= 0 [     ; If out of bounds
+    set zcor 0        ; Set to floor
+    settle            ; Then settle
+  ]
+end
+
+; Update surface and fix duplicates
+; Called by move
+; Observer context
+to update
+  ask turtles with [any? other turtles-here] [   ; Ask turtles with more than one turtle there
+    while [any? other turtles-here] [            ; While still turtles there
+      set zcor zcor + 1                          ; Move up so that only one turtle per patch
+    ]
+  ]
+  set surface turtles with [                         ; Update surface to turtles
+    not any? turtles-on patch xcor ycor (zcor + 1)   ; with not any above
+    and not member? self displaced                   ; and not displaced
+  ]
+end
+
+; Color sand based on group
+; Called by move or user
+; Observer context
+to color-sand
+  ask turtles [re-color]            ; Re-color all turtles
+  ask surface [set color orange]    ; Set surface to oraange
+  if displaced != nobody [          ; If any displaced
+    ask displaced [set color 125]   ; Set displaced to purple
+  ]
+end
+
+; Profile move
+; Called by user
+; Observer context
+to profile
+  profiler:start         ; Start profiling
+  repeat 100 [move]      ; Repeat move 100 times
+  profiler:stop          ; Stop profiling
+  print profiler:report  ; Print report
+  profiler:reset         ; Reset profiler for future use
+end
